@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dino Jump</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: #f7f7f7;
+            font-family: 'Courier New', Courier, monospace;
+            height: 100vh;
+            margin: 0;
+            user-select: none;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            border: 2px solid #333;
+            background-color: #fff;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+
+        #gameCanvas {
+            display: block;
+        }
+        
+        #startButton, #restartButton {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 1.2rem;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #333;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.1s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+
+        #startButton:active, #restartButton:active {
+            transform: scale(0.95);
+        }
+        
+        #startButton:disabled {
+            cursor: not-allowed;
+            background-color: #aaa;
+        }
+
+        #score {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 1.5rem;
+            color: #555;
+            font-weight: bold;
+        }
+
+        #gameOverMessage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2rem;
+            color: #333;
+            font-weight: bold;
+            display: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="600" height="200"></canvas>
+        <div id="score">Score: 0</div>
+        <div id="gameOverMessage">GAME OVER</div>
+    </div>
+    
+    <button id="startButton">Start Game</button>
+    <button id="restartButton" style="display: none;">Restart Game</button>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+        const scoreDisplay = document.getElementById('score');
+        const gameOverMessage = document.getElementById('gameOverMessage');
+
+        let isGameOver = true;
+        let gameSpeed = 5;
+        let score = 0;
+        let gameFrame = 0;
+        let cactusSpawnTimer = 0;
+        let birdSpawnTimer = 0;
+        let currentCactusInterval = 100;
+        let currentBirdInterval = 200;
+
+        const DINO_HEIGHT = 40;
+        const DINO_WIDTH = 25;
+        const DINO_DUCK_HEIGHT = 25;
+        const DINO_DUCK_WIDTH = 40;
+        const GROUND_Y = 160;
+
+        // Dino properties
+        let dino = {
+            x: 50,
+            y: GROUND_Y,
+            width: DINO_WIDTH,
+            height: DINO_HEIGHT,
+            velocityY: 0,
+            isJumping: false,
+            isDucking: false
+        };
+
+        const gravity = 0.5;
+        const jumpStrength = -10;
+
+        // Cactus properties
+        let cacti = [];
+        const cactusWidth = 20;
+        const cactusMinHeight = 30;
+        const cactusMaxHeight = 50;
+        const cactusMinInterval = 75;
+        const cactusMaxInterval = 150;
+
+        // Bird properties
+        let birds = [];
+        const birdWidth = 30;
+        const birdHeight = 15;
+        const birdY = 150; // Y position of the flying bird
+        const birdMinInterval = 150;
+        const birdMaxInterval = 300;
+
+
+        // Audio setup
+        let audioContext;
+        let backgroundMusic;
+
+        function playSound(frequency, duration, volume) {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.type = 'square';
+            oscillator.frequency.value = frequency;
+
+            gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration);
+        }
+        
+        function playBackgroundMusic() {
+            if (backgroundMusic) {
+                return; // Music is already playing
+            }
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 100; // Low frequency for a humming sound
+            gainNode.gain.value = 0.05; // Set a low volume
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.start();
+            backgroundMusic = oscillator;
+        }
+
+        function stopBackgroundMusic() {
+            if (backgroundMusic) {
+                backgroundMusic.stop();
+                backgroundMusic = null;
+            }
+        }
+
+        function playJumpSound() {
+            playSound(440, 0.1, 0.5);
+        }
+
+        function playGameOverSound() {
+            playSound(220, 0.5, 0.5);
+        }
+
+        function startGame() {
+            isGameOver = false;
+            score = 0;
+            gameSpeed = 5;
+            dino.isJumping = false;
+            dino.isDucking = false;
+            dino.y = GROUND_Y;
+            dino.width = DINO_WIDTH;
+            dino.height = DINO_HEIGHT;
+            cacti = [];
+            birds = [];
+            scoreDisplay.textContent = 'Score: 0';
+            startButton.style.display = 'none';
+            restartButton.style.display = 'none';
+            gameOverMessage.style.display = 'none';
+            playBackgroundMusic();
+            gameLoop();
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            stopBackgroundMusic();
+            playGameOverSound();
+            gameOverMessage.style.display = 'block';
+            restartButton.style.display = 'block';
+        }
+
+        function gameLoop() {
+            if (isGameOver) {
+                return;
+            }
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Update and draw dino
+            updateDino();
+            drawDino();
+
+            // Update and draw cacti and birds
+            updateCacti();
+            drawCacti();
+            updateBirds();
+            drawBirds();
+
+            // Check for collision
+            checkCollision();
+
+            // Update score and game speed
+            score++;
+            scoreDisplay.textContent = `Score: ${Math.floor(score / 10)}`;
+            gameSpeed = 5 + Math.floor(score / 30); // Increase speed every 30 points
+
+            gameFrame++;
+            requestAnimationFrame(gameLoop);
+        }
+
+        function drawDino() {
+            ctx.fillStyle = '#6495ED';
+            ctx.fillRect(dino.x, dino.y, dino.width, dino.height);
+        }
+
+        function updateDino() {
+            if (dino.isJumping) {
+                dino.velocityY += gravity;
+                dino.y += dino.velocityY;
+                if (dino.y >= GROUND_Y) {
+                    dino.y = GROUND_Y;
+                    dino.isJumping = false;
+                    dino.velocityY = 0;
+                }
+            }
+        }
+
+        function drawCacti() {
+            ctx.fillStyle = '#4CAF50';
+            cacti.forEach(cactus => {
+                ctx.fillRect(cactus.x, cactus.y, cactus.width, cactus.height);
+            });
+        }
+
+        function updateCacti() {
+            // Spawn new cactus
+            cactusSpawnTimer++;
+            if (cactusSpawnTimer > currentCactusInterval) {
+                const newHeight = Math.floor(Math.random() * (cactusMaxHeight - cactusMinHeight + 1)) + cactusMinHeight;
+                cacti.push({
+                    x: canvas.width,
+                    y: canvas.height - newHeight,
+                    width: cactusWidth,
+                    height: newHeight
+                });
+                // Reset timer and set a new random interval
+                cactusSpawnTimer = 0;
+                currentCactusInterval = Math.floor(Math.random() * (cactusMaxInterval - cactusMinInterval + 1)) + cactusMinInterval;
+            }
+
+            // Move cacti
+            cacti.forEach(cactus => {
+                cactus.x -= gameSpeed;
+            });
+
+            // Remove off-screen cacti
+            cacti = cacti.filter(cactus => cactus.x + cactus.width > 0);
+        }
+
+        function drawBirds() {
+            ctx.fillStyle = '#FF5733';
+            birds.forEach(bird => {
+                ctx.fillRect(bird.x, bird.y, bird.width, bird.height);
+            });
+        }
+
+        function updateBirds() {
+            // Spawn new bird
+            birdSpawnTimer++;
+            if (birdSpawnTimer > currentBirdInterval) {
+                birds.push({
+                    x: canvas.width,
+                    y: birdY,
+                    width: birdWidth,
+                    height: birdHeight
+                });
+                // Reset timer and set a new random interval
+                birdSpawnTimer = 0;
+                currentBirdInterval = Math.floor(Math.random() * (birdMaxInterval - birdMinInterval + 1)) + birdMinInterval;
+            }
+
+            // Move birds
+            birds.forEach(bird => {
+                bird.x -= gameSpeed * 1.2; // Birds move a bit faster
+            });
+
+            // Remove off-screen birds
+            birds = birds.filter(bird => bird.x + bird.width > 0);
+        }
+
+
+        function checkCollision() {
+            // Check for cactus collision
+            cacti.forEach(cactus => {
+                if (
+                    dino.x < cactus.x + cactus.width &&
+                    dino.x + dino.width > cactus.x &&
+                    dino.y < cactus.y + cactus.height &&
+                    dino.y + dino.height > cactus.y
+                ) {
+                    gameOver();
+                }
+            });
+
+            // Check for bird collision
+            birds.forEach(bird => {
+                if (
+                    dino.x < bird.x + bird.width &&
+                    dino.x + dino.width > bird.x &&
+                    dino.y < bird.y + bird.height &&
+                    dino.y + dino.height > bird.y
+                ) {
+                    gameOver();
+                }
+            });
+        }
+
+        function handleJump(event) {
+            if (!isGameOver && !dino.isJumping && !dino.isDucking && (event.key === ' ' || event.key === 'ArrowUp')) {
+                dino.isJumping = true;
+                dino.velocityY = jumpStrength;
+                playJumpSound();
+            }
+        }
+        
+        function handleDuck(event) {
+            if (!isGameOver && !dino.isJumping && event.key === 'ArrowDown') {
+                if (!dino.isDucking) {
+                    dino.isDucking = true;
+                    dino.width = DINO_DUCK_WIDTH;
+                    dino.height = DINO_DUCK_HEIGHT;
+                    dino.y = GROUND_Y + (DINO_HEIGHT - DINO_DUCK_HEIGHT);
+                }
+            }
+        }
+        
+        function handleUnduck(event) {
+            if (!isGameOver && event.key === 'ArrowDown') {
+                if (dino.isDucking) {
+                    dino.isDucking = false;
+                    dino.width = DINO_WIDTH;
+                    dino.height = DINO_HEIGHT;
+                    dino.y = GROUND_Y;
+                }
+            }
+        }
+
+
+        // Event Listeners
+        startButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', startGame);
+        document.addEventListener('keydown', handleJump);
+        document.addEventListener('keydown', handleDuck);
+        document.addEventListener('keyup', handleUnduck);
+        
+        startButton.disabled = false;
+        drawDino();
+    </script>
+
+</body>
+</html>

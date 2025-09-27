@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glitch Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tone.js library for music and sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <!-- Firebase libraries for database and auth -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Expose Firebase objects to the global scope
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            getFirestore,
+            doc,
+            getDoc,
+            setDoc,
+            setLogLevel
+        };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+        
+        body {
+            font-family: 'VT323', monospace;
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><text x="0" y="24" font-family="monospace" font-size="24">?</text></svg>'), auto;
+            background-color: #111;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background-image: repeating-linear-gradient(45deg, #0f0, #0f0 1px, #000 1px, #000 2px);
+            animation: static-glitch 0.5s infinite;
+        }
+
+        #game-canvas {
+            border: 2px solid red;
+            background-color: #000;
+            box-shadow: inset 0 0 10px 5px rgba(255, 0, 0, 0.7);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 0, 0, 0.5);
+            padding: 1rem;
+            text-align: center;
+            color: #f00;
+            animation: text-flicker 1s infinite;
+            z-index: 1000;
+        }
+
+        #start-button {
+            border: 2px dashed #00ff00;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 0.5rem 1rem;
+            font-size: 1.25rem;
+            color: #00ff00;
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><text x="0" y="24" font-family="monospace" font-size="24">!</text></svg>'), pointer;
+            animation: button-jitter 0.2s infinite;
+        }
+        
+        #game-info {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            color: #0f0;
+            font-size: 1.5rem;
+            z-index: 1000;
+        }
+
+        .score-box {
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 1px solid #0f0;
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        #directions-box {
+            position: absolute;
+            bottom: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 1px solid #0f0;
+            padding: 0.5rem 1rem;
+            text-align: center;
+            color: #0f0;
+            font-size: 1rem;
+            z-index: 1000;
+        }
+
+        @keyframes static-glitch {
+            0%, 100% {
+                background-image: repeating-linear-gradient(45deg, #0f0, #0f0 1px, #000 1px, #000 2px);
+            }
+            25% {
+                background-image: repeating-linear-gradient(45deg, #f00, #f00 2px, #000 2px, #000 3px);
+            }
+            50% {
+                background-image: repeating-linear-gradient(45deg, #00f, #00f 1px, #000 1px, #000 4px);
+            }
+            75% {
+                background-image: repeating-linear-gradient(45deg, #ff0, #ff0 3px, #000 3px, #000 4px);
+            }
+        }
+
+        @keyframes text-flicker {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        @keyframes button-jitter {
+            0% { transform: scale(1.0) rotate(0deg); }
+            25% { transform: scale(1.05) rotate(1deg); }
+            50% { transform: scale(1.0) rotate(-1deg); }
+            75% { transform: scale(1.02) rotate(0.5deg); }
+            100% { transform: scale(1.0) rotate(0deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center p-4">
+
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="game-info" class="hidden">
+            <div class="score-box">
+                <p id="score-text">SCORE: 0</p>
+                <p id="high-score-text">HIGH SCORE: 0</p>
+                <p id="timer-text">TIME: 30</p>
+            </div>
+        </div>
+        <div id="ui-overlay" class="hidden">
+            <h1 class="text-3xl mb-4">A------A</h1>
+            <p id="message-text" class="text-xl mb-4">Connecting...</p>
+            <button id="start-button">RECONNECT</button>
+        </div>
+    </div>
+    
+    <div id="directions-box">
+        <p>USE YOUR MOUSE TO CONTROL THE PLAYER AND HIT THE TARGETS TO SCORE.</p>
+        <p>BE CAREFUL, THE SYSTEM MAY CRASH AT ANY TIME!</P>
+    </div>
+
+    <script>
+        window.onload = function() {
+            const canvas = document.getElementById('game-canvas');
+            const ctx = canvas.getContext('2d');
+            const uiOverlay = document.getElementById('ui-overlay');
+            const startButton = document.getElementById('start-button');
+            const messageText = document.getElementById('message-text');
+            const gameInfo = document.getElementById('game-info');
+            const scoreText = document.getElementById('score-text');
+            const highScoreText = document.getElementById('high-score-text');
+            const timerText = document.getElementById('timer-text');
+            const directionsBox = document.getElementById('directions-box');
+
+            let gameRunning = false;
+            let playerX, playerY;
+            let targetX, targetY;
+            let glitchInterval;
+            let timerInterval;
+            let score = 0;
+            let highScore = 0;
+            let timeLeft = 30;
+            let isEnding = false; // New flag to prevent multiple endGame calls
+
+            // Variables for sound debouncing using Tone.Transport.scheduleOnce
+            let crashSoundScheduled = false;
+            let timeUpSoundScheduled = false;
+
+            let db, auth, userId;
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            // Tone.js setup for various sounds
+            const volume = new Tone.Volume(-10).toDestination();
+            
+            // Broken modem-style music
+            const modemSynth = new Tone.FMSynth({
+                modulationIndex: 12,
+                envelope: {
+                    attack: 0.001,
+                    decay: 0.2,
+                    sustain: 0.05,
+                    release: 0.2
+                },
+                modulationEnvelope: {
+                    attack: 0.001,
+                    decay: 0.2,
+                    sustain: 0,
+                    release: 0.2
+                }
+            }).connect(volume);
+            
+            // Noise for the modem static
+            const noiseSynth = new Tone.NoiseSynth({
+                noise: {
+                    type: "white"
+                },
+                envelope: {
+                    attack: 0.001,
+                    decay: 0.1,
+                    sustain: 0
+                }
+            }).connect(volume);
+
+            // Modem sequence of notes and noise
+            const modemSequence = new Tone.Sequence((time, note) => {
+                if (note === "noise") {
+                    noiseSynth.triggerAttackRelease("16n", time);
+                } else {
+                    modemSynth.triggerAttackRelease(note, "16n", time);
+                }
+            }, ["C5", "F5", "noise", "G5", "D#5", "A4", "noise", "G4", "C5", "noise"], "8n");
+            
+            modemSequence.loop = true;
+
+            const initAudio = async () => {
+                await Tone.start();
+                modemSequence.start(0);
+            };
+            
+            const playTargetHitSound = () => {
+                modemSynth.triggerAttackRelease("C6", "16n");
+            };
+            
+            const playCrashSound = () => {
+                if (crashSoundScheduled) return;
+                crashSoundScheduled = true;
+                Tone.Transport.scheduleOnce(() => {
+                    const now = Tone.now();
+                    modemSynth.triggerAttackRelease("C3", "4n", now);
+                    modemSynth.triggerAttackRelease("F#3", "4n", now + 0.2);
+                    modemSynth.triggerAttackRelease("C4", "4n", now + 0.4);
+                    noiseSynth.triggerAttackRelease("1s", now + 0.1); 
+                }, "+0.1"); // Schedule to happen in 0.1 seconds from now.
+            };
+
+            const playTimeUpSound = () => {
+                if (timeUpSoundScheduled) return;
+                timeUpSoundScheduled = true;
+                Tone.Transport.scheduleOnce(() => {
+                    const now = Tone.now();
+                    modemSynth.triggerAttackRelease("C4", "8n", now);
+                    modemSynth.triggerAttackRelease("B3", "8n", now + 0.15);
+                    modemSynth.triggerAttackRelease("A3", "8n", now + 0.3);
+                }, "+0.1");
+            };
+            
+            const getHighScore = async () => {
+                if (!db || !userId) return;
+                try {
+                    const scoreDoc = await firebase.getDoc(firebase.doc(db, `artifacts/${appId}/users/${userId}/scores/highScore`));
+                    if (scoreDoc.exists()) {
+                        highScore = scoreDoc.data().score || 0;
+                        highScoreText.textContent = `HIGH SCORE: ${highScore}`;
+                    } else {
+                        highScore = 0;
+                    }
+                } catch (e) {
+                    console.error("Error getting high score: ", e);
+                }
+            };
+            
+            const saveHighScore = async () => {
+                if (!db || !userId) return;
+                try {
+                    if (score > highScore) {
+                        highScore = score;
+                        highScoreText.textContent = `HIGH SCORE: ${highScore}`;
+                        await firebase.setDoc(firebase.doc(db, `artifacts/${appId}/users/${userId}/scores/highScore`), {
+                            score: highScore
+                        }, { merge: true });
+                    }
+                } catch (e) {
+                    console.error("Error saving high score: ", e);
+                }
+            };
+
+            const updateCanvasSize = () => {
+                canvas.width = window.innerWidth * 0.8;
+                canvas.height = window.innerHeight * 0.8;
+            };
+
+            const startGame = () => {
+                isEnding = false; // Reset the flag
+                crashSoundScheduled = false;
+                timeUpSoundScheduled = false;
+
+                uiOverlay.classList.add('hidden');
+                directionsBox.classList.add('hidden');
+                gameInfo.classList.remove('hidden');
+                gameRunning = true;
+                score = 0;
+                timeLeft = 30;
+                scoreText.textContent = `SCORE: ${score}`;
+                timerText.textContent = `TIME: ${timeLeft}`;
+                
+                playerX = canvas.width / 2;
+                playerY = canvas.height / 2;
+                spawnTarget();
+                
+                glitchInterval = setInterval(randomGlitch, 500);
+                timerInterval = setInterval(() => {
+                    timeLeft--;
+                    timerText.textContent = `TIME: ${timeLeft}`;
+                    if (timeLeft <= 0) {
+                        endGame(false); // Game ends due to time out
+                    }
+                }, 1000);
+
+                // Start the music transport
+                Tone.Transport.start();
+            };
+
+            const endGame = (crashed) => {
+                if (isEnding) return; // Prevent multiple calls
+                isEnding = true;
+                
+                gameRunning = false;
+                clearInterval(glitchInterval);
+                clearInterval(timerInterval);
+                saveHighScore();
+                
+                // Stop the music transport and clear any events
+                Tone.Transport.stop();
+                Tone.Transport.cancel();
+                
+                if (crashed) {
+                    messageText.textContent = `CONNECTION FAILED`;
+                    playCrashSound();
+                } else {
+                    messageText.textContent = `CONNECTION FAILED`;
+                    playTimeUpSound();
+                }
+
+                uiOverlay.classList.remove('hidden');
+                gameInfo.classList.add('hidden');
+                startButton.textContent = "RECONNECT";
+            };
+
+            const spawnTarget = () => {
+                const targetRadius = 25;
+                const canvasRect = canvas.getBoundingClientRect();
+                const infoRect = gameInfo.getBoundingClientRect();
+
+                // Calculate the score box coordinates relative to the canvas
+                const infoLeft = infoRect.left - canvasRect.left;
+                const infoRight = infoRect.right - canvasRect.left;
+                const infoTop = infoRect.top - canvasRect.top;
+                const infoBottom = infoRect.bottom - canvasRect.top;
+
+                // Loop until a valid position is found
+                let overlap = true;
+                while (overlap) {
+                    // Generate a random position within the canvas boundaries
+                    targetX = Math.random() * (canvas.width - targetRadius * 2);
+                    targetY = Math.random() * (canvas.height - targetRadius * 2);
+
+                    // Check for overlap with the score box
+                    const targetLeft = targetX;
+                    const targetRight = targetX + targetRadius * 2;
+                    const targetTop = targetY;
+                    const targetBottom = targetY + targetRadius * 2;
+
+                    // If the target doesn't overlap with the score box, we found a good spot
+                    if (targetRight < infoLeft || targetLeft > infoRight || targetBottom < infoTop || targetTop > infoBottom) {
+                        overlap = false;
+                    }
+                }
+            };
+
+            const draw = () => {
+                if (!gameRunning) return;
+
+                // Erase screen with a glitched trail
+                ctx.fillStyle = `rgba(0, 0, 0, 0.1)`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Draw player with glitches
+                ctx.fillStyle = `rgb(${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)})`;
+                ctx.fillRect(playerX, playerY, 50 + Math.random() * 20, 50 + Math.random() * 20);
+
+                // Draw "target"
+                ctx.fillStyle = `rgb(${255 - Math.floor(Math.random() * 100)}, ${255 - Math.floor(Math.random() * 100)}, 255)`;
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, 25, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.closePath();
+
+                // Add random lines
+                if (Math.random() < 0.2) {
+                    ctx.strokeStyle = `rgb(${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)})`;
+                    ctx.beginPath();
+                    ctx.moveTo(Math.random() * canvas.width, Math.random() * canvas.height);
+                    ctx.lineTo(Math.random() * canvas.width, Math.random() * canvas.height);
+                    ctx.stroke();
+                }
+
+                checkCollision();
+            };
+
+            const checkCollision = () => {
+                const distance = Math.sqrt(Math.pow(playerX + 25 - targetX, 2) + Math.pow(playerY + 25 - targetY, 2));
+                if (distance < 50) {
+                    score++;
+                    scoreText.textContent = `SCORE: ${score}`;
+                    playTargetHitSound();
+                    spawnTarget();
+
+                    // 50% chance of a system crash
+                    if (Math.random() < 0.5) {
+                        endGame(true); // Game ends due to a crash
+                    }
+                }
+            };
+
+            const randomGlitch = () => {
+                if (!gameRunning) return;
+                const r = Math.random();
+                if (r < 0.2) {
+                    // Random screen shake
+                    canvas.style.transform = `translate(${Math.random() * 10 - 5}px, ${Math.random() * 10 - 5}px)`;
+                } else {
+                    canvas.style.transform = '';
+                }
+            };
+
+            const handleMouseMove = (e) => {
+                if (!gameRunning) return;
+                const rect = canvas.getBoundingClientRect();
+                playerX = e.clientX - rect.left - 25;
+                playerY = e.clientY - rect.top - 25;
+            };
+            
+            startButton.addEventListener('click', startGame);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('resize', updateCanvasSize);
+
+            // Initialize Firebase and Auth
+            const initFirebase = async () => {
+                try {
+                    const app = firebase.initializeApp(firebaseConfig);
+                    auth = firebase.getAuth(app);
+                    db = firebase.getFirestore(app);
+                    
+                    if (initialAuthToken) {
+                        await firebase.signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await firebase.signInAnonymously(auth);
+                    }
+
+                    firebase.onAuthStateChanged(auth, (user) => {
+                        if (user) {
+                            userId = user.uid;
+                            getHighScore();
+                        } else {
+                            userId = null;
+                            console.error("Authentication failed. High score feature will not work.");
+                        }
+                    });
+
+                } catch (e) {
+                    console.error("Error initializing Firebase: ", e);
+                }
+            };
+
+            updateCanvasSize();
+            uiOverlay.classList.remove('hidden');
+            
+            // Initialize audio and firebase
+            initAudio();
+            initFirebase();
+
+            // Main game loop
+            const gameLoop = () => {
+                draw();
+                requestAnimationFrame(gameLoop);
+            };
+            gameLoop();
+        };
+    </script>
+</body>
+</html>
